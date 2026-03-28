@@ -6,7 +6,7 @@
 // no internet connection needed.
 // ================================================================
 
-var CACHE_NAME = 'tennis-rally-v1';
+var CACHE_NAME = 'tennis-rally-v2';
 
 // List of files to cache
 var urlsToCache = [
