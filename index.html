@@ -140,7 +140,7 @@ function projectToScreen(worldX, worldDepth, worldY) {
 // These control how the ball moves. Tweak these to change game feel.
 var GRAVITY = 0.0018;        // How fast the ball falls (higher = faster drop)
 var BOUNCE_DAMPING = 0.55;   // Energy kept after bounce (0.55 = loses 45%)
-var BALL_RADIUS_BASE = 10;   // Ball size at depth 0 (close to you)
+var BALL_RADIUS_BASE = 6;    // Ball size at depth 0 (smaller, more realistic)
 
 // --- THE BALL OBJECT ---
 var ball = {
@@ -155,14 +155,138 @@ var ball = {
 };
 
 // --- GAME STATE ---
-var gameState = 'menu';       // 'menu', 'serving', 'playing', 'missed', 'scored'
-var previousState = 'serving'; // Stores state before pause
-var serveTimer = 0;           // Countdown before next serve
-var rallyCount = 0;           // Current rally length
-var score = 0;                // Total points scored this session
-var bestRally = 0;            // Longest rally this session
-var paused = false;           // Is the game paused?
-var gameTimer = 0;            // Frame counter (for animations)
+var gameState = 'menu';       // 'menu', 'serving', 'playing', 'missed', 'scored', 'out', 'matchover'
+var previousState = 'serving';
+var serveTimer = 0;
+var rallyCount = 0;
+var bestRally = 0;
+var paused = false;
+var gameTimer = 0;
+
+// ================================================================
+// REAL TENNIS SCORING
+//
+// Points in a game: 0, 15, 30, 40
+// If both reach 40: Deuce
+// After deuce: Advantage, then Game if they win again
+// First to 6 games wins the set (must win by 2)
+// At 6-6: Tiebreak (first to 7 points, win by 2)
+// We play 1 set per match.
+// ================================================================
+var tennis = {
+  playerPoints: 0,
+  opponentPoints: 0,
+  playerGames: 0,
+  opponentGames: 0,
+  isTiebreak: false,
+  playerTBPoints: 0,
+  opponentTBPoints: 0,
+  matchOver: false,
+  winner: '',
+};
+
+function pointToTennis(p) {
+  return ['0', '15', '30', '40'][p] || '40';
+}
+
+function getPointDisplay() {
+  if (tennis.isTiebreak) {
+    return tennis.playerTBPoints + ' - ' + tennis.opponentTBPoints;
+  }
+  var pp = tennis.playerPoints;
+  var op = tennis.opponentPoints;
+  if (pp >= 3 && op >= 3) {
+    if (pp === op) return 'DEUCE';
+    if (pp > op) return 'AD - 40';
+    return '40 - AD';
+  }
+  return pointToTennis(pp) + ' - ' + pointToTennis(op);
+}
+
+function playerWinsPoint() {
+  if (tennis.matchOver) return;
+  if (tennis.isTiebreak) {
+    tennis.playerTBPoints++;
+    if (tennis.playerTBPoints >= 7 && tennis.playerTBPoints - tennis.opponentTBPoints >= 2) {
+      playerWinsGame();
+    }
+    return;
+  }
+  tennis.playerPoints++;
+  if (tennis.playerPoints >= 4 && tennis.playerPoints - tennis.opponentPoints >= 2) {
+    playerWinsGame();
+  }
+}
+
+function opponentWinsPoint() {
+  if (tennis.matchOver) return;
+  if (tennis.isTiebreak) {
+    tennis.opponentTBPoints++;
+    if (tennis.opponentTBPoints >= 7 && tennis.opponentTBPoints - tennis.playerTBPoints >= 2) {
+      opponentWinsGame();
+    }
+    return;
+  }
+  tennis.opponentPoints++;
+  if (tennis.opponentPoints >= 4 && tennis.opponentPoints - tennis.playerPoints >= 2) {
+    opponentWinsGame();
+  }
+}
+
+function playerWinsGame() {
+  tennis.playerGames++;
+  tennis.playerPoints = 0;
+  tennis.opponentPoints = 0;
+  tennis.isTiebreak = false;
+  tennis.playerTBPoints = 0;
+  tennis.opponentTBPoints = 0;
+  addFloatingText('GAME - You!', '#44FF44', 28);
+  if (tennis.playerGames >= 6 && tennis.playerGames - tennis.opponentGames >= 2) {
+    tennis.matchOver = true;
+    tennis.winner = 'player';
+    gameState = 'matchover';
+    totalWins++;
+    addFloatingText('YOU WIN THE SET!', '#FFD700', 36);
+    saveHighScores();
+  } else if (tennis.playerGames === 6 && tennis.opponentGames === 6) {
+    tennis.isTiebreak = true;
+    addFloatingText('TIEBREAK!', '#FFD700', 32);
+  }
+}
+
+function opponentWinsGame() {
+  tennis.opponentGames++;
+  tennis.playerPoints = 0;
+  tennis.opponentPoints = 0;
+  tennis.isTiebreak = false;
+  tennis.playerTBPoints = 0;
+  tennis.opponentTBPoints = 0;
+  addFloatingText('GAME - Opponent', '#FF4444', 28);
+  if (tennis.opponentGames >= 6 && tennis.opponentGames - tennis.playerGames >= 2) {
+    tennis.matchOver = true;
+    tennis.winner = 'opponent';
+    gameState = 'matchover';
+    addFloatingText('OPPONENT WINS', '#FF4444', 36);
+    saveHighScores();
+  } else if (tennis.playerGames === 6 && tennis.opponentGames === 6) {
+    tennis.isTiebreak = true;
+    addFloatingText('TIEBREAK!', '#FFD700', 32);
+  }
+}
+
+function resetMatch() {
+  tennis.playerPoints = 0;
+  tennis.opponentPoints = 0;
+  tennis.playerGames = 0;
+  tennis.opponentGames = 0;
+  tennis.isTiebreak = false;
+  tennis.playerTBPoints = 0;
+  tennis.opponentTBPoints = 0;
+  tennis.matchOver = false;
+  tennis.winner = '';
+  rallyCount = 0;
+  bestRally = 0;
+}
 
 // ================================================================
 // SESSION 6: VISUAL POLISH
@@ -292,29 +416,23 @@ function drawFloatingTexts() {
   ctx.globalAlpha = 1;
 }
 
-// --- HIGH SCORE (saved between sessions) ---
-var highScore = 0;
+// --- STATS (saved between sessions) ---
+var totalWins = 0;
 var highRally = 0;
 try {
-  var savedScore = localStorage.getItem('tennisHighScore');
+  var savedWins = localStorage.getItem('tennisWins');
   var savedRally = localStorage.getItem('tennisHighRally');
-  if (savedScore) highScore = parseInt(savedScore);
+  if (savedWins) totalWins = parseInt(savedWins);
   if (savedRally) highRally = parseInt(savedRally);
-} catch(e) {
-  // localStorage not available — that's fine, just start at 0
-}
+} catch(e) {}
 
-// Save high scores to phone storage
 function saveHighScores() {
   try {
-    if (score > highScore) {
-      highScore = score;
-      localStorage.setItem('tennisHighScore', highScore.toString());
-    }
     if (bestRally > highRally) {
       highRally = bestRally;
       localStorage.setItem('tennisHighRally', highRally.toString());
     }
+    localStorage.setItem('tennisWins', totalWins.toString());
   } catch(e) {}
 }
 
@@ -342,9 +460,9 @@ var player = {
 // --- HIT DETECTION SETTINGS ---
 // The "hit zone" is the range of depth values where the ball
 // is close enough for you to reach it with your racket.
-var HIT_ZONE_MIN = -0.02;   // Ball can be slightly past you
-var HIT_ZONE_MAX = 0.12;    // Ball must be fairly close
-var HIT_REACH = 0.6;        // How far left/right your racket can reach
+var HIT_ZONE_MIN = -0.05;   // Ball can be slightly past you (generous)
+var HIT_ZONE_MAX = 0.18;    // Ball can be further away and still hittable
+var HIT_REACH = 0.8;        // Wide horizontal reach so you don't miss side shots
 
 // --- INPUT STATE ---
 // We track the most recent tap so the update function can check it.
@@ -441,13 +559,17 @@ canvas.addEventListener('touchstart', function(e) {
   e.preventDefault();
   if (paused) return;
 
-  // If on menu screen, start the game
+  // Menu screen — start a new match
   if (gameState === 'menu') {
+    resetMatch();
     gameState = 'serving';
     serveTimer = 60;
-    score = 0;
-    rallyCount = 0;
-    bestRally = 0;
+    return;
+  }
+
+  // Match over — tap to go back to menu
+  if (gameState === 'matchover') {
+    gameState = 'menu';
     return;
   }
 
@@ -457,17 +579,18 @@ canvas.addEventListener('touchstart', function(e) {
   tapConsumed = false;
 });
 
-// Handle mouse clicks (for testing on a computer)
 canvas.addEventListener('click', function(e) {
   if (paused) return;
 
-  // If on menu screen, start the game
   if (gameState === 'menu') {
+    resetMatch();
     gameState = 'serving';
     serveTimer = 60;
-    score = 0;
-    rallyCount = 0;
-    bestRally = 0;
+    return;
+  }
+
+  if (gameState === 'matchover') {
+    gameState = 'menu';
     return;
   }
 
@@ -552,7 +675,7 @@ function checkHit() {
 
   // Check if the tap was recent enough (within 300 milliseconds)
   var tapAge = Date.now() - lastTapTime;
-  var tappedRecently = tapAge < 300;
+  var tappedRecently = tapAge < 500;  // 500ms window — generous timing
 
   // Check if the ball is within horizontal reach of the player
   var horizontalDist = Math.abs(ball.x - player.x);
@@ -571,7 +694,7 @@ function checkHit() {
 
     // Reverse the ball's direction — send it toward the opponent!
     ball.vDepth = 0.01 + Math.random() * 0.004;  // Speed toward far end
-    ball.vx = aimX * 0.016;                       // Horizontal aim (strong corners)
+    ball.vx = aimX * 0.009;                       // Reduced aim power — keeps ball in court
     ball.vy = 0.025 + Math.random() * 0.01;      // Upward arc
     ball.trail = [];                               // Clear trail for fresh look
 
@@ -740,14 +863,32 @@ function updateBall() {
     }
   }
 
-  // --- KEEP BALL WITHIN COURT WIDTH ---
-  // If the ball goes past the sidelines, clamp it
-  if (ball.x < -1.2) { ball.x = -1.2; ball.vx *= -0.5; }
-  if (ball.x > 1.2) { ball.x = 1.2; ball.vx *= -0.5; }
+  // --- BALL WENT OFF COURT (past the sidelines) ---
+  // If the ball goes out of bounds, the point ends.
+  // Who gets the point depends on who hit it out:
+  //   vDepth > 0 means the PLAYER hit it out → opponent scores
+  //   vDepth < 0 means the OPPONENT hit it out → player scores
+  if (ball.x < -1.05 || ball.x > 1.05) {
+    ball.active = false;
+    serveTimer = 90;
+    if (rallyCount > bestRally) bestRally = rallyCount;
+    saveHighScores();
+
+    if (ball.vDepth > 0) {
+      // Player hit it out — opponent gets the point
+      gameState = 'out';
+      addFloatingText('OUT!', '#FF8800', 32);
+      opponentWinsPoint();
+    } else {
+      // Opponent hit it out — player gets the point
+      gameState = 'scored';
+      addFloatingText('OUT! Your point!', '#44FF44', 28);
+      playerWinsPoint();
+    }
+  }
 
   // --- BALL REACHED YOUR END (depth <= 0) ---
-  // In Session 3, we'll add hit detection here.
-  // For now, the ball just resets after going past you.
+  // You failed to return — opponent wins the point
   if (ball.depth <= -0.05) {
     ball.active = false;
     gameState = 'missed';
@@ -755,23 +896,19 @@ function updateBall() {
     if (rallyCount > bestRally) bestRally = rallyCount;
     saveHighScores();
     addFloatingText('MISSED!', '#FF4444', 32);
+    opponentWinsPoint();
   }
 
   // --- BALL REACHED FAR END (depth >= 1) ---
-  // The opponent failed to return! You scored a point!
+  // Opponent failed to return — you win the point!
   if (ball.depth >= 1.05) {
     ball.active = false;
     gameState = 'scored';
     serveTimer = 90;
-    score += 10;
     if (rallyCount > bestRally) bestRally = rallyCount;
     saveHighScores();
-    addFloatingText('SCORED! +10', '#44FF44', 32);
-    // Rally bonus every 10 returns
-    if (rallyCount >= 10 && rallyCount % 10 === 0) {
-      score += 5;
-      addFloatingText('RALLY BONUS +5', '#FFD700', 22);
-    }
+    addFloatingText('Your point!', '#44FF44', 32);
+    playerWinsPoint();
   }
 
   // --- UPDATE THE TRAIL ---
@@ -910,7 +1047,7 @@ function update() {
   gameTimer++;
 
   // Handle the serve timer
-  if (gameState === 'serving' || gameState === 'missed' || gameState === 'scored') {
+  if (!tennis.matchOver && (gameState === 'serving' || gameState === 'missed' || gameState === 'scored' || gameState === 'out')) {
     serveTimer--;
     if (serveTimer <= 0) {
       serve();
@@ -1450,33 +1587,47 @@ function drawHitFlash() {
 function drawHUD() {
   var W = canvas.width;
 
-  // --- SCORE DISPLAY (top-left) ---
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-  ctx.beginPath();
-  ctx.roundRect(10, 8, 110, 32, 10);
-  ctx.fill();
-  ctx.fillStyle = '#FFD700';
-  ctx.font = 'bold 16px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText('Score: ' + score, 20, 30);
+  // ============================================================
+  // TENNIS SCOREBOARD (top-left)
+  //
+  // Shows: Games (e.g. "3 - 2") and current point (e.g. "30 - 15")
+  // In tiebreak, shows tiebreak points instead
+  // ============================================================
 
-  // --- HIGH SCORE (top-left, below score) ---
-  if (highScore > 0) {
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-    ctx.beginPath();
-    ctx.roundRect(10, 46, 110, 24, 8);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.font = '12px sans-serif';
-    ctx.fillText('Best: ' + highScore, 20, 63);
+  // Background box
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.beginPath();
+  ctx.roundRect(10, 8, 180, 58, 10);
+  ctx.fill();
+
+  // "Games" label and score
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('GAMES', 20, 22);
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('You ' + tennis.playerGames + ' - ' + tennis.opponentGames + ' Opp', 20, 38);
+
+  // Current point score
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 14px sans-serif';
+  var pointText = tennis.isTiebreak ? 'TB: ' + getPointDisplay() : getPointDisplay();
+  ctx.fillText(pointText, 20, 56);
+
+  // Tiebreak indicator
+  if (tennis.isTiebreak) {
+    ctx.fillStyle = '#FF6B6B';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillText('TIEBREAK', 130, 22);
   }
 
   // --- RALLY COUNTER (top center) ---
   if (gameState === 'playing' && rallyCount > 0) {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-    var textWidth = 90;
     ctx.beginPath();
-    ctx.roundRect(W / 2 - textWidth / 2, 8, textWidth, 32, 16);
+    ctx.roundRect(W / 2 - 45, 8, 90, 32, 16);
     ctx.fill();
     ctx.fillStyle = '#FFD700';
     ctx.font = 'bold 16px sans-serif';
@@ -1491,12 +1642,65 @@ function drawHUD() {
     ctx.beginPath();
     ctx.roundRect(W / 2 - 50, 46, 100, 24, 8);
     ctx.fill();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.font = '12px sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Best rally: ' + br, W / 2, 63);
+    ctx.fillText('Best rally: ' + br, W / 2, 62);
   }
-  // Scored/missed feedback is now handled by floating texts (see drawFloatingTexts)
+}
+
+// ================================================================
+// MATCH OVER SCREEN
+// ================================================================
+function drawMatchOver() {
+  var W = canvas.width;
+  var H = canvas.height;
+
+  // Draw the game underneath
+  drawBackground();
+  drawOpponent();
+  drawPlayer();
+
+  // Dark overlay
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Result
+  if (tennis.winner === 'player') {
+    ctx.fillStyle = '#FFD700';
+    ctx.font = 'bold ' + Math.min(W * 0.07, 40) + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('YOU WIN!', W / 2, H * 0.28);
+  } else {
+    ctx.fillStyle = '#FF4444';
+    ctx.font = 'bold ' + Math.min(W * 0.07, 40) + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('YOU LOSE', W / 2, H * 0.28);
+  }
+
+  // Final score
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold ' + Math.min(W * 0.05, 28) + 'px sans-serif';
+  ctx.fillText(tennis.playerGames + ' - ' + tennis.opponentGames, W / 2, H * 0.40);
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+  ctx.font = Math.min(W * 0.03, 16) + 'px sans-serif';
+  ctx.fillText('Games', W / 2, H * 0.46);
+
+  // Best rally
+  if (bestRally > 0) {
+    ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
+    ctx.font = Math.min(W * 0.03, 15) + 'px sans-serif';
+    ctx.fillText('Best Rally: ' + bestRally, W / 2, H * 0.56);
+  }
+
+  // Play again prompt
+  var pulse = 0.4 + Math.sin(Date.now() * 0.005) * 0.6;
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold ' + Math.min(W * 0.04, 22) + 'px sans-serif';
+  ctx.fillText('TAP TO PLAY AGAIN', W / 2, H * 0.72);
+  ctx.globalAlpha = 1;
 }
 
 // ================================================================
@@ -1528,8 +1732,8 @@ function drawPauseOverlay() {
   // Stats while paused
   ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
   ctx.font = '14px sans-serif';
-  ctx.fillText('Score: ' + score + '  |  Best Rally: ' + Math.max(bestRally, highRally), W / 2, H * 0.62);
-  ctx.fillText('High Score: ' + highScore, W / 2, H * 0.68);
+  ctx.fillText('Games: You ' + tennis.playerGames + ' - ' + tennis.opponentGames + ' Opp  |  Best Rally: ' + Math.max(bestRally, highRally), W / 2, H * 0.62);
+  ctx.fillText('Wins: ' + totalWins, W / 2, H * 0.68);
 }
 
 // ================================================================
@@ -1575,11 +1779,11 @@ function drawMenu() {
   ctx.fillText('TAP TO PLAY', W / 2, H * 0.70);
   ctx.globalAlpha = 1;
 
-  // High scores
-  if (highScore > 0) {
+  // Stats
+  if (totalWins > 0 || highRally > 0) {
     ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
     ctx.font = Math.min(W * 0.03, 15) + 'px sans-serif';
-    ctx.fillText('High Score: ' + highScore + '  |  Best Rally: ' + highRally, W / 2, H * 0.82);
+    ctx.fillText('Wins: ' + totalWins + '  |  Best Rally: ' + highRally, W / 2, H * 0.82);
   }
 
   // Hint
@@ -1635,6 +1839,10 @@ function startGameLoop() {
       drawRotateMessage();
     } else if (gameState === 'menu') {
       drawMenu();
+    } else if (gameState === 'matchover') {
+      updateFloatingTexts();
+      drawMatchOver();
+      drawFloatingTexts();
     } else if (paused) {
       draw();
       drawPauseOverlay();
